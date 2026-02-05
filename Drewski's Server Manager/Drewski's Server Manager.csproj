@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Drewski_s_Server_Manager</RootNamespace>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+	<Product>Drewski's Server Manager</Product>
+	<Description>Vintage Story Server Manager</Description>
+	<Version>3.5.0</Version>
+	<FileVersion>3.5.0.0</FileVersion>
+  </PropertyGroup>
+
+</Project>
