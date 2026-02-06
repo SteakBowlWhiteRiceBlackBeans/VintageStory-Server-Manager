@@ -20,3 +20,5 @@ It provides a simple graphical interface to:
 ## Downloads
 Get the latest compiled version from the  
 [Releases](https://github.com/SteakBowlWhiteRiceBlackBeans/VintageStory-Server-Manager/releases) page.
+
+[intage Story mod page](https://mods.vintagestory.at/show/mod/41122)
