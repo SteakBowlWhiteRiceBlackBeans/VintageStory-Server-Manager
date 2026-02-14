@@ -11,7 +11,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.VisualBasic.Devices;
-// test 123
+using System.Linq;
+
+
+
 namespace Drewski_s_Server_Manager
 {
     public partial class Form1 : Form
@@ -22,14 +25,11 @@ namespace Drewski_s_Server_Manager
         private Button _btnMin = null!;
         private Button _btnMax = null!;
         private Button _btnClose = null!;
-
-        // Right-side controls
         private Panel _rightArea = null!;
         private Label _statusLabel = null!;
         private Panel _statusDot = null!;
         private Label _resourceLabel = null!;
         private Label _playerCountLabel = null!;
-
         private Button _btnStart = null!;
         private Button _btnStop = null!;
         private Button _btnRestart = null!;
@@ -37,34 +37,45 @@ namespace Drewski_s_Server_Manager
         private Button _btnBackup = null!;
         private Button _btnMods = null!;
         private Button _btnSettings = null!;
-
+        private Button _btnBackupFolder = null!;
+        private Button _btnModPage = null!;
         private TextBox _commandBox = null!;
         private Button _btnSendCmd = null!;
-
-        // Server process
         private Process? _serverProcess;
         private volatile bool _stopRequested;
-
-        // Settings
         private const string DefaultServerExecutable = "%appdata%/Vintagestory/VintagestoryServer.exe";
         private string _serverExeSetting = DefaultServerExecutable;
         private string _launchArgsSetting = string.Empty;
-
-        // New Settings
-        private string _serverDataPathSetting = string.Empty; // VintageStoryServerData root folder
+        private string _serverDataPathSetting = string.Empty;
         private bool _autoSaveEnabledSetting;
         private int _autoSaveMinutesSetting = 15;
-
         private bool _autoBackupEnabledSetting;
         private int _autoBackupMinutesSetting = 60;
-
+        private int _maxBackupFileCountSetting;
+        private double _maxBackupFolderSizeGbSetting;
         private bool _autoRestartEnabledSetting;
-        private int _autoRestartHour12Setting = 6;        // 1-12
-        private int _autoRestartMinuteSetting = 0;        // 0-59
-        private string _autoRestartAmPmSetting = "AM";    // "AM" / "PM"
+        private int _autoRestartHour12Setting = 6;
+        private int _autoRestartMinuteSetting = 0;
+        private string _autoRestartAmPmSetting = "AM";
+        private const int WM_NCHITTEST = 0x84;
+        private const int HTLEFT = 10;
+        private const int HTRIGHT = 11;
+        private const int HTTOP = 12;
+        private const int HTTOPLEFT = 13;
+        private const int HTTOPRIGHT = 14;
+        private const int HTBOTTOM = 15;
+        private const int HTBOTTOMLEFT = 16;
+        private const int HTBOTTOMRIGHT = 17;
+        private const int ResizeBorder = 8;
+        private readonly Color _resizeBorderColor = Color.FromArgb(45, 45, 45);
+        private const int CustomBorderThickness = 1;
+        private const int WM_EXITSIZEMOVE = 0x0232;
+        private const int MaxConsoleLines = 3000;
+        private readonly Color _consoleInfoColor = Color.Gainsboro;
+        private readonly Color _consoleWarnColor = Color.FromArgb(240, 200, 70);   // light yellow
+        private readonly Color _consoleErrorColor = Color.FromArgb(235, 90, 90);  // light red
 
 
-        // Settings persistence
         private sealed class AppSettings
         {
             public string ServerExecutable { get; set; } = DefaultServerExecutable;
@@ -78,10 +89,13 @@ namespace Drewski_s_Server_Manager
             public bool AutoBackupEnabled { get; set; } = false;
             public int AutoBackupMinutes { get; set; } = 60;
 
+            public int MaxBackupFileCount { get; set; } = 0; // 0 = unlimited
+            public double MaxBackupFolderSizeGb { get; set; } = 0; // 0 = unlimited
+
             public bool AutoRestartEnabled { get; set; } = false;
-            public int AutoRestartHour12 { get; set; } = 6;       // 1-12
-            public int AutoRestartMinute { get; set; } = 0;       // 0-59
-            public string AutoRestartAmPm { get; set; } = "AM";   // "AM"/"PM"
+            public int AutoRestartHour12 { get; set; } = 6;
+            public int AutoRestartMinute { get; set; } = 0;
+            public string AutoRestartAmPm { get; set; } = "AM";
 
         }
 
@@ -111,13 +125,9 @@ namespace Drewski_s_Server_Manager
         private DateTime _lastAutoRestartDate = DateTime.MinValue;   // local date last executed
         private bool _autoRestartInProgress;
 
-        // We only send each countdown message once per day
         private readonly HashSet<int> _restartAnnouncementsSent = new();
 
-        // Announcement command:
-        // NOTE (uncertainty): Vintage Story supports various chat/announce commands depending on version/mods.
-        // If your server doesn't recognize /announce, change this to the correct command (e.g. /say or /broadcast).
-        private const string RestartAnnounceCommand = "/announce";
+        private const string RestartAnnounceCommand = "/say";
 
         private readonly Color _appBg = Color.FromArgb(24, 24, 24);
         private readonly Color _titleBg = Color.FromArgb(40, 40, 40);
@@ -130,8 +140,8 @@ namespace Drewski_s_Server_Manager
         public Form1()
         {
             InitializeComponent();
-            BuildUi();       // must be first so _console exists
-            LoadSettings();  // loads config if present
+            BuildUi();
+            LoadSettings();
 
             _playerPollTimer.Interval = 15_000;
             _playerPollTimer.Tick += async (_, __) => await PollPlayerCountAsync();
@@ -142,21 +152,31 @@ namespace Drewski_s_Server_Manager
             _autoSaveTimer.Tick += (_, __) => OnAutoSaveTick();
             _autoBackupTimer.Tick += (_, __) => OnAutoBackupTick();
 
-            // Lightweight clock check; 20s gives good responsiveness without being noisy.
             _autoRestartTimer.Interval = 20_000;
             _autoRestartTimer.Tick += async (_, __) => await CheckAutoRestartAsync();
 
-            // Apply automation scheduling in case settings loaded with enabled options
             ApplyAutomationScheduling(serverRunning: false);
         }
 
+        private const int WS_THICKFRAME = 0x00040000;
+        private const int WS_MINIMIZEBOX = 0x00020000;
+        private const int WS_MAXIMIZEBOX = 0x00010000;
+        private const int WS_SYSMENU = 0x00080000;
+
+
+
+
+
+
         private void BuildUi()
         {
-            Text = "Drewski's Server Manager";
+            Text = "Drewski's Server Manager"; // This is for the OS, not title bar
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1200, 720);
+            ClientSize = new Size(1200, 740);
+            MinimumSize = new Size(1000, 740);
             BackColor = _appBg;
             FormBorderStyle = FormBorderStyle.None;
+            Padding = new Padding(8);
 
             Shown += (_, __) => ApplyRoundedCornersIfNeeded();
             SizeChanged += (_, __) => ApplyRoundedCornersIfNeeded();
@@ -174,6 +194,8 @@ namespace Drewski_s_Server_Manager
             root.Controls.Add(_titleBar);
             _titleBar.MouseDown += TitleBar_MouseDown;
 
+
+
             _titleLabel = new Label
             {
                 AutoSize = false,
@@ -181,9 +203,8 @@ namespace Drewski_s_Server_Manager
                 Width = 360,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(14, 0, 0, 0),
-                Text = "Drewski's Server Manager v3.5",
+                Text = "Drewski's Server Manager v3.6", // Title bar text
                 ForeColor = Color.White,
-
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular)
             };
             _titleLabel.MouseDown += TitleBar_MouseDown;
@@ -222,40 +243,27 @@ namespace Drewski_s_Server_Manager
             };
             root.Controls.Add(content);
 
-            var consoleHost = new Panel
-            {
-                Width = 720,
-                Dock = DockStyle.Left,
-                Padding = new Padding(14),
-                BackColor = Color.Black
-            };
 
+            // RIGHT PANEL — fixed width
             _rightArea = new Panel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Right,
+                Width = 340, // tweak this to taste
                 BackColor = _appBg,
                 Padding = new Padding(18, 8, 8, 8),
                 AutoScroll = true
             };
 
-            var divider = new Panel
+            // LEFT PANEL — console expands automatically
+            var consoleHost = new Panel
             {
-                Dock = DockStyle.Left,
-                Width = 1,
-                BackColor = Color.FromArgb(210, 210, 210)
+                Dock = DockStyle.Fill,
+                Padding = new Padding(14),
+                BackColor = Color.Black
             };
 
-            var gap = new Panel
-            {
-                Dock = DockStyle.Left,
-                Width = 16,
-                BackColor = _appBg
-            };
-
-            content.Controls.Add(_rightArea);
-            content.Controls.Add(gap);
-            content.Controls.Add(divider);
             content.Controls.Add(consoleHost);
+            content.Controls.Add(_rightArea);
 
             _console = new RichTextBox
             {
@@ -281,6 +289,7 @@ namespace Drewski_s_Server_Manager
             SetStatus(ServerStatus.Stopped);
             SetPlayerCount(0);
         }
+
 
         private void BuildRightPanel(Panel host)
         {
@@ -363,15 +372,14 @@ namespace Drewski_s_Server_Manager
             cmdPanel.Controls.Add(spacer);
             cmdPanel.Controls.Add(_btnSendCmd);
 
-            // Buttons host (7 buttons)
             var buttonsHost = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 7 * 44 + 6 * 10,
                 BackColor = _panelBg
             };
             card.Controls.Add(buttonsHost);
 
+            // Create buttons
             _btnStart = MakeActionButton("Start");
             _btnStart.Click += async (_, __) => await StartServerAsync();
 
@@ -396,9 +404,13 @@ namespace Drewski_s_Server_Manager
             _btnBackup = MakeActionButton("Backup");
             _btnBackup.Click += (_, __) =>
             {
+                EnforceBackupRetentionBeforeCreatingNew();
                 var stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
                 SendCommand($"/genbackup {stamp}", echo: true);
             };
+
+            _btnBackupFolder = MakeActionButton("Backup Folder");
+            _btnBackupFolder.Click += (_, __) => OpenBackupsFolder();
 
             _btnMods = MakeActionButton("Mods");
             _btnMods.Click += (_, __) => ShowModsDialog();
@@ -406,7 +418,34 @@ namespace Drewski_s_Server_Manager
             _btnSettings = MakeActionButton("Settings");
             _btnSettings.Click += (_, __) => ShowSettingsDialog();
 
-            var buttons = new[] { _btnStart, _btnStop, _btnRestart, _btnSave, _btnBackup, _btnMods, _btnSettings };
+            _btnModPage = MakeActionButton("Mod Page");
+            _btnModPage.Click += (_, __) =>
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "https://mods.vintagestory.at/show/mod/41122",
+                    UseShellExecute = true
+                });
+            };
+
+            // These need to be in order
+            var buttons = new Button[]
+            {
+    _btnStart,
+    _btnStop,
+    _btnRestart,
+    _btnSave,
+    _btnBackup,
+    _btnBackupFolder,
+    _btnMods,
+    _btnSettings,
+    _btnModPage
+            };
+
+            const int btnH = 44;
+            const int gapY = 10;
+
+            buttonsHost.Height = (buttons.Length * btnH) + ((buttons.Length - 1) * gapY);
 
             int y = 0;
             foreach (var b in buttons)
@@ -414,11 +453,12 @@ namespace Drewski_s_Server_Manager
                 b.Left = 0;
                 b.Top = y;
                 b.Width = buttonsHost.ClientSize.Width;
-                b.Height = 44;
+                b.Height = btnH;
                 b.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
                 buttonsHost.Controls.Add(b);
-                y += 44 + 10;
+                y += btnH + gapY;
             }
+
 
             // Player count row
             var playerRow = new Panel
@@ -500,7 +540,6 @@ namespace Drewski_s_Server_Manager
             };
             statusRow.Controls.Add(_statusLabel);
 
-            // Header (added last so it docks above everything)
             var header = new Label
             {
                 Dock = DockStyle.Top,
@@ -550,6 +589,9 @@ namespace Drewski_s_Server_Manager
                 bool? autoBackupEnabled = null;
                 int? autoBackupMinutes = null;
 
+                int? maxBackupFileCount = null;
+                double? maxBackupFolderSizeGb = null;
+
                 bool? autoRestartEnabled = null;
                 int? autoRestartHour12 = null;
                 string? autoRestartAmPm = null;
@@ -583,6 +625,11 @@ namespace Drewski_s_Server_Manager
                     autoBackupEnabled = TryGetBool(root, "AutoBackupEnabled") ?? TryGetBool(root, "autoBackupEnabled");
                     autoBackupMinutes = TryGetInt(root, "AutoBackupMinutes") ?? TryGetInt(root, "autoBackupMinutes");
 
+                    maxBackupFileCount = TryGetInt(root, "MaxBackupFileCount") ?? TryGetInt(root, "maxBackupFileCount");
+
+                    maxBackupFolderSizeGb = TryGetDouble(root, "MaxBackupFolderSizeGb") ?? TryGetDouble(root, "maxBackupFolderSizeGb");
+
+
                     autoRestartEnabled = TryGetBool(root, "AutoRestartEnabled") ?? TryGetBool(root, "autoRestartEnabled");
                     autoRestartHour12 = TryGetInt(root, "AutoRestartHour12") ?? TryGetInt(root, "autoRestartHour12");
                     autoRestartMinute = TryGetInt(root, "AutoRestartMinute") ?? TryGetInt(root, "autoRestartMinute");
@@ -606,6 +653,9 @@ namespace Drewski_s_Server_Manager
 
                 _autoBackupEnabledSetting = autoBackupEnabled ?? _settings.AutoBackupEnabled;
                 _autoBackupMinutesSetting = ClampMinutes(autoBackupMinutes ?? _settings.AutoBackupMinutes, 60);
+
+                _maxBackupFileCountSetting = ClampMaxBackupCount(maxBackupFileCount ?? _settings.MaxBackupFileCount, 0);
+                _maxBackupFolderSizeGbSetting = ClampMaxBackupSizeGb(maxBackupFolderSizeGb ?? _settings.MaxBackupFolderSizeGb, 0);
 
                 _autoRestartEnabledSetting = autoRestartEnabled ?? _settings.AutoRestartEnabled;
                 _autoRestartHour12Setting = ClampHour12(autoRestartHour12 ?? _settings.AutoRestartHour12, 6);
@@ -651,6 +701,33 @@ namespace Drewski_s_Server_Manager
         private static int ClampHour12(int value, int fallback) => (value >= 1 && value <= 12) ? value : fallback;
         private static int ClampMinute(int value, int fallback) => (value >= 0 && value <= 59) ? value : fallback;
 
+        private static double? TryGetDouble(JsonElement obj, string propName)
+        {
+            if (!obj.TryGetProperty(propName, out var v)) return null;
+
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+            if (v.ValueKind == JsonValueKind.String && double.TryParse(v.GetString(), out var s)) return s;
+
+            return null;
+        }
+
+        private static int ClampMaxBackupCount(int value, int fallback)
+        {
+            // 0 = unlimited
+            if (value < 0) return fallback;
+            if (value > 100000) return 100000;
+            return value;
+        }
+
+        private static double ClampMaxBackupSizeGb(double value, double fallback)
+        {
+            // 0 = unlimited
+            if (value < 0) return fallback;
+            if (value > 100000) return 100000;
+            return value;
+        }
+
+
 
         private static string NormalizeAmPm(string value)
         {
@@ -678,6 +755,9 @@ namespace Drewski_s_Server_Manager
 
                 _settings.AutoBackupEnabled = _autoBackupEnabledSetting;
                 _settings.AutoBackupMinutes = ClampMinutes(_autoBackupMinutesSetting, 60);
+
+                _settings.MaxBackupFileCount = ClampMaxBackupCount(_maxBackupFileCountSetting, 0);
+                _settings.MaxBackupFolderSizeGb = ClampMaxBackupSizeGb(_maxBackupFolderSizeGbSetting, 0);
 
                 _settings.AutoRestartEnabled = _autoRestartEnabledSetting;
                 _settings.AutoRestartHour12 = ClampHour12(_autoRestartHour12Setting, 6);
@@ -710,10 +790,13 @@ namespace Drewski_s_Server_Manager
                 _autoSaveMinutesSetting,
                 _autoBackupEnabledSetting,
                 _autoBackupMinutesSetting,
+                _maxBackupFileCountSetting,
+                _maxBackupFolderSizeGbSetting,
                 _autoRestartEnabledSetting,
                 _autoRestartHour12Setting,
                 _autoRestartMinuteSetting,
-                _autoRestartAmPmSetting);
+                _autoRestartAmPmSetting
+            );
 
             if (dlg.ShowDialog(this) != DialogResult.OK)
                 return;
@@ -729,11 +812,13 @@ namespace Drewski_s_Server_Manager
             _autoBackupEnabledSetting = dlg.AutoBackupEnabled;
             _autoBackupMinutesSetting = dlg.AutoBackupMinutes;
 
+            _maxBackupFileCountSetting = dlg.MaxBackupFileCount;
+            _maxBackupFolderSizeGbSetting = dlg.MaxBackupFolderSizeGb;
+
             _autoRestartEnabledSetting = dlg.AutoRestartEnabled;
             _autoRestartHour12Setting = dlg.AutoRestartHour12;
             _autoRestartMinuteSetting = dlg.AutoRestartMinute;
             _autoRestartAmPmSetting = dlg.AutoRestartAmPm;
-
 
             SaveSettings();
 
@@ -895,8 +980,6 @@ namespace Drewski_s_Server_Manager
                 AppendConsoleLine("[manager] Server started.");
                 SetStatus(ServerStatus.Running);
 
-                // reset per-day restart sent messages when server starts (optional)
-                // (we keep per-day, but this helps if you start/stop around the window)
                 _ = PollPlayerCountAsync();
             }
             catch (Exception ex)
@@ -1185,16 +1268,16 @@ namespace Drewski_s_Server_Manager
                 Text = text,
                 FlatStyle = FlatStyle.Flat,
                 UseVisualStyleBackColor = false,
-                BackColor = Color.FromArgb(50, 50, 50),        // dark default
-                ForeColor = Color.FromArgb(230, 230, 230),    // light text
+                BackColor = Color.FromArgb(50, 50, 50),
+                ForeColor = Color.FromArgb(230, 230, 230),
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular),
                 TextAlign = ContentAlignment.MiddleCenter,
                 TabStop = false
             };
 
             btn.FlatAppearance.BorderSize = 0;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(60, 60, 60); // hover
-            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(75, 75, 75); // click
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(60, 60, 60);
+            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(75, 75, 75);
 
             return btn;
         }
@@ -1202,10 +1285,53 @@ namespace Drewski_s_Server_Manager
 
         private void AppendConsoleLine(string line)
         {
+            if (_console == null || _console.IsDisposed) return;
+
+            var c = _consoleInfoColor;
+
+            if (line.IndexOf("[Server Error]", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("Critical Error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("[err]", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                c = _consoleErrorColor;
+            }
+            else if (line.IndexOf("[Server Warning]", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     line.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                c = _consoleWarnColor;
+            }
+
+            _console.SelectionStart = _console.TextLength;
+            _console.SelectionLength = 0;
+            _console.SelectionColor = c;
             _console.AppendText(line + Environment.NewLine);
+            _console.SelectionColor = _consoleInfoColor;
+
+            try
+            {
+                int lineCount = _console.GetLineFromCharIndex(_console.TextLength) + 1;
+                if (lineCount > MaxConsoleLines)
+                {
+                    int removeLines = lineCount - MaxConsoleLines;
+
+                    int charIndex = _console.GetFirstCharIndexFromLine(removeLines);
+                    if (charIndex > 0)
+                    {
+                        _console.Select(0, charIndex);
+                        _console.SelectedText = string.Empty;
+                    }
+                }
+            }
+            catch
+            {
+                // Keep console resilient don't crash UI if trimming fails.
+            }
+
+            // Scrollingg
             _console.SelectionStart = _console.TextLength;
             _console.ScrollToCaret();
         }
+
 
         private void ApplyRoundedCornersIfNeeded()
         {
@@ -1227,6 +1353,7 @@ namespace Drewski_s_Server_Manager
             SendMessage(Handle, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         }
 
+
         // Build final launch args. Adds --dataPath from Settings automatically.
         private string BuildEffectiveLaunchArguments()
         {
@@ -1245,7 +1372,7 @@ namespace Drewski_s_Server_Manager
             return args;
         }
 
-        // Detect manual --datapath usage in Launch Arguments (blocked)
+        // Detect manual --datapath usage in Launch Arguments
         private bool LaunchArgsContainDataPath(string args)
         {
             if (string.IsNullOrWhiteSpace(args)) return false;
@@ -1315,9 +1442,69 @@ namespace Drewski_s_Server_Manager
             }
         }
 
-        // ==========================
+
+        private void OpenBackupsFolder()
+        {
+            try
+            {
+
+                if (string.IsNullOrWhiteSpace(_serverDataPathSetting))
+                {
+                    MessageBox.Show(this,
+                        "Set the VintageStoryServerData folder in Settings first.",
+                        "Backup Folder",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
+                }
+
+                var backupsDir = GetBackupsFolderPath();
+
+                if (string.IsNullOrWhiteSpace(backupsDir))
+                {
+                    MessageBox.Show(this, "Backups folder path is empty.", "Backup Folder",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                if (!Directory.Exists(backupsDir))
+                    Directory.CreateDirectory(backupsDir);
+
+                AppendConsoleLine($"[manager] Opening backups folder: {backupsDir}");
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{backupsDir}\"",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to open backups folder: " + ex.Message, "Backup Folder",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+
+        private string GetBackupsFolderPath()
+        {
+            string dataRoot;
+
+            if (!string.IsNullOrWhiteSpace(_serverDataPathSetting))
+                dataRoot = ResolvePath(_serverDataPathSetting);
+            else
+                dataRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "VintagestoryData");
+
+            return Path.Combine(dataRoot, "Backups");
+        }
+
+
+
+
         // AUTOMATION IMPLEMENTATION
-        // ==========================
         private void ApplyAutomationScheduling(bool serverRunning)
         {
             // Auto Save timer
@@ -1360,7 +1547,6 @@ namespace Drewski_s_Server_Manager
             if (!IsServerRunning()) return;
             if (!_autoSaveEnabledSetting) return;
 
-            // Prevent reentrancy if tick overlaps (rare, but safe)
             _autoSaveTimer.Stop();
             try
             {
@@ -1381,6 +1567,7 @@ namespace Drewski_s_Server_Manager
             _autoBackupTimer.Stop();
             try
             {
+                EnforceBackupRetentionBeforeCreatingNew();
                 var stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
                 SendCommand($"/genbackup {stamp}", echo: true);
             }
@@ -1391,23 +1578,114 @@ namespace Drewski_s_Server_Manager
             }
         }
 
+        private void EnforceBackupRetentionBeforeCreatingNew()
+        {
+            int maxFiles = ClampMaxBackupCount(_maxBackupFileCountSetting, 0);
+
+            long maxBytes = 0;
+            if (_maxBackupFolderSizeGbSetting > 0)
+                maxBytes = (long)(_maxBackupFolderSizeGbSetting * 1024d * 1024d * 1024d);
+
+            if (maxFiles == 0 && maxBytes == 0) return;
+
+            var backupsDir = GetBackupsFolderPath();
+            if (string.IsNullOrWhiteSpace(backupsDir) || !Directory.Exists(backupsDir))
+                return;
+
+            try
+            {
+                var di = new DirectoryInfo(backupsDir);
+
+                var files = di.GetFiles()
+                    .OrderBy(f => f.CreationTimeUtc)
+                    .ThenBy(f => f.LastWriteTimeUtc)
+                    .ToList();
+
+                // safety net, never delete da newest
+                if (files.Count <= 1) return;
+
+                var newest = files
+                    .OrderByDescending(f => f.CreationTimeUtc)
+                    .ThenByDescending(f => f.LastWriteTimeUtc)
+                    .First();
+
+                if (maxFiles > 0)
+                {
+                    while (files.Count >= maxFiles && files.Count > 1)
+                    {
+                        var oldest = files.First();
+
+                        // never delete newest
+                        if (string.Equals(oldest.FullName, newest.FullName, StringComparison.OrdinalIgnoreCase))
+                            break;
+
+                        if (!TryDeleteFile(oldest))
+                            break;
+
+                        files.RemoveAt(0);
+                    }
+                }
+                if (maxBytes > 0 && files.Count > 1)
+                {
+                    long total = files.Sum(f => f.Length);
+
+                    while (total > maxBytes && files.Count > 1)
+                    {
+                        var oldest = files.First();
+
+                        // never delete newest
+                        if (string.Equals(oldest.FullName, newest.FullName, StringComparison.OrdinalIgnoreCase))
+                            break;
+
+                        long len = oldest.Length;
+
+                        if (!TryDeleteFile(oldest))
+                            break;
+
+                        files.RemoveAt(0);
+                        total -= len;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendConsoleLine("[manager] Backup retention check failed: " + ex.Message);
+            }
+        }
+
+        private static bool TryDeleteFile(FileInfo f)
+        {
+            try
+            {
+                f.Refresh();
+                if (!f.Exists) return true;
+
+                if (f.IsReadOnly) f.IsReadOnly = false;
+
+                f.Delete();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+
         private async Task CheckAutoRestartAsync()
         {
             if (!IsServerRunning()) return;
             if (!_autoRestartEnabledSetting) return;
             if (_autoRestartInProgress) return;
 
-            // Build today's scheduled time (local)
             var now = DateTime.Now;
             var scheduled = BuildScheduledRestartTime(now.Date);
 
-            // New day: clear sent announcements
             if (_restartAnnouncementsSent.Count > 0 && _lastAutoRestartDate.Date != now.Date)
             {
                 _restartAnnouncementsSent.Clear();
             }
 
-            // Only announce within the 15-minute window BEFORE restart
             var windowStart = scheduled.AddMinutes(-15);
 
             if (now >= windowStart && now <= scheduled)
@@ -1415,7 +1693,6 @@ namespace Drewski_s_Server_Manager
                 var minutesRemaining = (int)Math.Ceiling((scheduled - now).TotalMinutes);
                 if (minutesRemaining < 0) minutesRemaining = 0;
 
-                // 15 minutes prior and every 3 minutes after (15,12,9,6,3,0)
                 if (minutesRemaining == 15 ||
                     minutesRemaining == 12 ||
                     minutesRemaining == 9 ||
@@ -1431,13 +1708,11 @@ namespace Drewski_s_Server_Manager
                             ? "Server is rebooting now"
                             : $"Server is rebooting in {minutesRemaining} minutes";
 
-                        // NOTE (uncertainty): If /announce isn't correct for your server, change RestartAnnounceCommand constant.
                         SendCommand($"{RestartAnnounceCommand} {msg}", echo: true);
                     }
                 }
             }
 
-            // Execute restart at/after scheduled time, once per day
             if (now >= scheduled && _lastAutoRestartDate.Date != now.Date)
             {
                 _autoRestartInProgress = true;
@@ -1474,8 +1749,6 @@ namespace Drewski_s_Server_Manager
             AppendConsoleLine("[manager] Auto Restart: issuing save...");
             SendCommand("/autosavenow", echo: true);
 
-            // You asked: wait 5 seconds after save completes.
-            // NOTE (uncertainty): We don't have a deterministic "save completed" event yet, so we wait 5 seconds.
             await Task.Delay(5000);
 
             AppendConsoleLine("[manager] Auto Restart: restarting server...");
@@ -1483,11 +1756,10 @@ namespace Drewski_s_Server_Manager
             await StartServerAsync();
         }
 
-        // ==========================
-        // WIN32 INTEROP
-        // ==========================
+
         private const int WM_NCLBUTTONDOWN = 0xA1;
         private const int HTCAPTION = 0x2;
+
 
         [DllImport("user32.dll")]
         private static extern bool ReleaseCapture();
@@ -1500,9 +1772,7 @@ namespace Drewski_s_Server_Manager
             int nLeftRect, int nTopRect, int nRightRect, int nBottomRect,
             int nWidthEllipse, int nHeightEllipse);
 
-        // ==========================
         // SETTINGS WINDOW
-        // ==========================
         private sealed class SettingsForm : Form
         {
             private readonly TextBox _exeBox;
@@ -1516,6 +1786,9 @@ namespace Drewski_s_Server_Manager
             private readonly CheckBox _autoBackupChk;
             private readonly TextBox _autoBackupMinutesBox;
 
+            private readonly TextBox _maxBackupCountBox;
+            private readonly TextBox _maxBackupSizeGbBox;
+
             private readonly CheckBox _autoRestartChk;
             private readonly ComboBox _restartHourBox;
             private readonly ComboBox _restartMinuteBox;
@@ -1524,7 +1797,6 @@ namespace Drewski_s_Server_Manager
 
             public string ServerExecutable => _exeBox.Text.Trim();
             public string LaunchArguments => _argsBox.Text;
-
             public string ServerDataPath => _dataPathBox.Text.Trim();
 
             public bool AutoSaveEnabled => _autoSaveChk.Checked;
@@ -1533,11 +1805,13 @@ namespace Drewski_s_Server_Manager
             public bool AutoBackupEnabled => _autoBackupChk.Checked;
             public int AutoBackupMinutes => ParseMinutesOrDefault(_autoBackupMinutesBox.Text, 60);
 
+            public int MaxBackupFileCount => ParseIntOrDefault(_maxBackupCountBox.Text, 0);
+            public double MaxBackupFolderSizeGb => ParseDoubleOrDefault(_maxBackupSizeGbBox.Text, 0);
+
             public bool AutoRestartEnabled => _autoRestartChk.Checked;
             public int AutoRestartHour12 => ParseHour12OrDefault(_restartHourBox.SelectedItem?.ToString(), 6);
-            public string AutoRestartAmPm => NormalizeAmPm(_restartAmPmBox.SelectedItem?.ToString());
             public int AutoRestartMinute => ParseMinuteOrDefault(_restartMinuteBox.SelectedItem?.ToString(), 0);
-
+            public string AutoRestartAmPm => NormalizeAmPm(_restartAmPmBox.SelectedItem?.ToString());
 
             public SettingsForm(
                 string exeValue,
@@ -1547,11 +1821,13 @@ namespace Drewski_s_Server_Manager
                 int autoSaveMinutes,
                 bool autoBackupEnabled,
                 int autoBackupMinutes,
+                int maxBackupFileCount,
+                double maxBackupFolderSizeGb,
                 bool autoRestartEnabled,
                 int autoRestartHour12,
                 int autoRestartMinute,
-                string autoRestartAmPm)
-
+                string autoRestartAmPm
+            )
             {
                 Text = "Settings";
                 StartPosition = FormStartPosition.CenterParent;
@@ -1560,7 +1836,7 @@ namespace Drewski_s_Server_Manager
                 MaximizeBox = true;
                 ShowInTaskbar = false;
 
-                MinimumSize = new Size(700, 520);
+                MinimumSize = new Size(700, 580);
                 ClientSize = new Size(820, 580);
 
                 var root = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14) };
@@ -1570,41 +1846,36 @@ namespace Drewski_s_Server_Manager
                 {
                     Dock = DockStyle.Fill,
                     ColumnCount = 1,
-                    RowCount = 18
+                    RowCount = 20
                 };
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                root.Controls.Add(layout);
 
-                // EXE
+                // Row styles
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
 
-                // ARGS
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
 
-                // DATAPATH
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
 
-                // AUTOMATION header
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
 
-                // autosave, autobackup
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
 
-                // auto restart row + note
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
 
-                // filler + buttons
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-
-                root.Controls.Add(layout);
 
                 // Server Executable
                 layout.Controls.Add(new Label
@@ -1685,7 +1956,7 @@ namespace Drewski_s_Server_Manager
                 btnBrowseData.Click += (_, __) => BrowseForFolder(_dataPathBox);
                 dataRow.Controls.Add(btnBrowseData, 1, 0);
 
-                // Automation label
+                // Automation header
                 layout.Controls.Add(new Label
                 {
                     Text = "Automation",
@@ -1699,7 +1970,6 @@ namespace Drewski_s_Server_Manager
                     Dock = DockStyle.Fill,
                     FlowDirection = FlowDirection.LeftToRight,
                     WrapContents = false,
-                    Padding = new Padding(0),
                     AutoSize = false
                 };
                 layout.Controls.Add(autoSaveRow, 0, 10);
@@ -1735,7 +2005,6 @@ namespace Drewski_s_Server_Manager
                     Dock = DockStyle.Fill,
                     FlowDirection = FlowDirection.LeftToRight,
                     WrapContents = false,
-                    Padding = new Padding(0),
                     AutoSize = false
                 };
                 layout.Controls.Add(autoBackupRow, 0, 11);
@@ -1765,16 +2034,67 @@ namespace Drewski_s_Server_Manager
                 _autoBackupMinutesBox.KeyPress += Minutes_KeyPressNumbersOnly;
                 autoBackupRow.Controls.Add(_autoBackupMinutesBox);
 
-                // Auto Restart row (checkbox + time dropdowns)
+                // Max backup file count row
+                var maxCountRow = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false,
+                    AutoSize = false
+                };
+                layout.Controls.Add(maxCountRow, 0, 12);
+
+                maxCountRow.Controls.Add(new Label
+                {
+                    Text = "Max backup files     0 = unlimited",
+                    AutoSize = true,
+                    Margin = new Padding(0, 8, 12, 0)
+                });
+
+                _maxBackupCountBox = new TextBox
+                {
+                    Width = 90,
+                    Text = Math.Max(0, maxBackupFileCount).ToString(),
+                    Margin = new Padding(0, 5, 0, 0)
+                };
+                _maxBackupCountBox.KeyPress += NumbersOnly_KeyPress;
+                maxCountRow.Controls.Add(_maxBackupCountBox);
+
+                // Max backup folder size row
+                var maxSizeRow = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false,
+                    AutoSize = false
+                };
+                layout.Controls.Add(maxSizeRow, 0, 13);
+
+                maxSizeRow.Controls.Add(new Label
+                {
+                    Text = "Max backup folder size (GB)  0 = unlimited",
+                    AutoSize = true,
+                    Margin = new Padding(0, 8, 12, 0)
+                });
+
+                _maxBackupSizeGbBox = new TextBox
+                {
+                    Width = 90,
+                    Text = (maxBackupFolderSizeGb < 0 ? 0 : maxBackupFolderSizeGb).ToString("0.##"),
+                    Margin = new Padding(0, 5, 0, 0)
+                };
+                _maxBackupSizeGbBox.KeyPress += DecimalNumbersOnly_KeyPress;
+                maxSizeRow.Controls.Add(_maxBackupSizeGbBox);
+
+                // Auto Restart row
                 var autoRestartRow = new FlowLayoutPanel
                 {
                     Dock = DockStyle.Fill,
                     FlowDirection = FlowDirection.LeftToRight,
                     WrapContents = false,
-                    Padding = new Padding(0),
                     AutoSize = false
                 };
-                layout.Controls.Add(autoRestartRow, 0, 12);
+                layout.Controls.Add(autoRestartRow, 0, 14);
 
                 _autoRestartChk = new CheckBox
                 {
@@ -1830,8 +2150,6 @@ namespace Drewski_s_Server_Manager
                 _restartAmPmBox.SelectedItem = NormalizeAmPm(autoRestartAmPm);
                 autoRestartRow.Controls.Add(_restartAmPmBox);
 
-
-                // Auto Restart note row (shows only when enabled)
                 _restartNote = new Label
                 {
                     Dock = DockStyle.Fill,
@@ -1841,11 +2159,19 @@ namespace Drewski_s_Server_Manager
                     Padding = new Padding(2, 2, 2, 0),
                     Visible = autoRestartEnabled
                 };
-                layout.Controls.Add(_restartNote, 0, 13);
+                layout.Controls.Add(_restartNote, 0, 15);
 
                 // Enable/disable dependent inputs
                 _autoSaveChk.CheckedChanged += (_, __) => _autoSaveMinutesBox.Enabled = _autoSaveChk.Checked;
-                _autoBackupChk.CheckedChanged += (_, __) => _autoBackupMinutesBox.Enabled = _autoBackupChk.Checked;
+
+                void ApplyBackupFieldEnable()
+                {
+                    bool enabled = _autoBackupChk.Checked;
+                    _autoBackupMinutesBox.Enabled = enabled;
+                    _maxBackupCountBox.Enabled = enabled;
+                    _maxBackupSizeGbBox.Enabled = enabled;
+                }
+                _autoBackupChk.CheckedChanged += (_, __) => ApplyBackupFieldEnable();
 
                 _autoRestartChk.CheckedChanged += (_, __) =>
                 {
@@ -1856,11 +2182,12 @@ namespace Drewski_s_Server_Manager
                 };
 
                 _autoSaveMinutesBox.Enabled = _autoSaveChk.Checked;
-                _autoBackupMinutesBox.Enabled = _autoBackupChk.Checked;
 
                 _restartHourBox.Enabled = _autoRestartChk.Checked;
                 _restartMinuteBox.Enabled = _autoRestartChk.Checked;
                 _restartAmPmBox.Enabled = _autoRestartChk.Checked;
+
+                ApplyBackupFieldEnable();
 
                 // Buttons row
                 var buttons = new FlowLayoutPanel
@@ -1870,7 +2197,7 @@ namespace Drewski_s_Server_Manager
                     Padding = new Padding(0),
                     WrapContents = false
                 };
-                layout.Controls.Add(buttons, 0, 15);
+                layout.Controls.Add(buttons, 0, 17);
 
                 var btnSave = new Button
                 {
@@ -1925,6 +2252,32 @@ namespace Drewski_s_Server_Manager
                         return;
                     }
 
+                    if (!int.TryParse(_maxBackupCountBox.Text, out var count) || count < 0)
+                    {
+                        MessageBox.Show(this,
+                            "Max backups (files) must be 0 (unlimited) or a positive number.",
+                            "Invalid Value",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+
+                        DialogResult = DialogResult.None;
+                        _maxBackupCountBox.Focus();
+                        return;
+                    }
+
+                    if (!double.TryParse(_maxBackupSizeGbBox.Text, out var gb) || gb < 0)
+                    {
+                        MessageBox.Show(this,
+                            "Max backup folder size must be 0 (unlimited) or a positive number.",
+                            "Invalid Value",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+
+                        DialogResult = DialogResult.None;
+                        _maxBackupSizeGbBox.Focus();
+                        return;
+                    }
+
                     if (_autoRestartChk.Checked)
                     {
                         if (_restartHourBox.SelectedItem is null)
@@ -1940,7 +2293,6 @@ namespace Drewski_s_Server_Manager
                             return;
                         }
 
-                        // ADD THIS BLOCK
                         if (_restartMinuteBox.SelectedItem is null)
                         {
                             MessageBox.Show(this,
@@ -2008,6 +2360,9 @@ namespace Drewski_s_Server_Manager
                 _autoBackupChk.Checked = false;
                 _autoBackupMinutesBox.Text = "60";
 
+                _maxBackupCountBox.Text = "0";
+                _maxBackupSizeGbBox.Text = "0";
+
                 _autoRestartChk.Checked = false;
                 _restartHourBox.SelectedItem = "6";
                 _restartMinuteBox.SelectedItem = "00";
@@ -2055,6 +2410,25 @@ namespace Drewski_s_Server_Manager
                 if (!char.IsDigit(e.KeyChar)) e.Handled = true;
             }
 
+            private static void NumbersOnly_KeyPress(object? sender, KeyPressEventArgs e)
+            {
+                if (char.IsControl(e.KeyChar)) return;
+                if (!char.IsDigit(e.KeyChar)) e.Handled = true;
+            }
+
+            private static void DecimalNumbersOnly_KeyPress(object? sender, KeyPressEventArgs e)
+            {
+                if (char.IsControl(e.KeyChar)) return;
+
+                if (sender is not TextBox tb) { e.Handled = true; return; }
+
+                if (char.IsDigit(e.KeyChar)) return;
+
+                if (e.KeyChar == '.' && !tb.Text.Contains('.')) return;
+
+                e.Handled = true;
+            }
+
             private static bool IsValidMinutes(string? text)
             {
                 if (!int.TryParse(text, out var v)) return false;
@@ -2077,6 +2451,18 @@ namespace Drewski_s_Server_Manager
             {
                 if (!int.TryParse(text, out var v)) return fallback;
                 return (v >= 0 && v <= 59) ? v : fallback;
+            }
+
+            private static int ParseIntOrDefault(string? text, int fallback)
+            {
+                if (!int.TryParse(text, out var v)) return fallback;
+                return v < 0 ? fallback : v;
+            }
+
+            private static double ParseDoubleOrDefault(string? text, double fallback)
+            {
+                if (!double.TryParse(text, out var v)) return fallback;
+                return v < 0 ? fallback : v;
             }
 
             private static string NormalizeAmPm(string? value)
@@ -2104,9 +2490,7 @@ namespace Drewski_s_Server_Manager
             }
         }
 
-        // ==========================
         // MODS WINDOW
-        // ==========================
         private sealed class ModsForm : Form
         {
             private readonly ListBox _list;
@@ -2237,5 +2621,62 @@ namespace Drewski_s_Server_Manager
                 }
             }
         }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+
+            // Snap-to-top maximize when finishing a move/resize operation
+            if (m.Msg == WM_EXITSIZEMOVE && WindowState == FormWindowState.Normal)
+            {
+                var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+
+                // If the window ended up at/near the top of the working area, maximize it
+                if (Top <= wa.Top + 2)
+                {
+                    WindowState = FormWindowState.Maximized;
+                    ApplyRoundedCornersIfNeeded();
+                }
+
+                // Do not return; not required, but safe to continue
+            }
+
+            // Borderless resize hit-test
+            if (m.Msg != WM_NCHITTEST || WindowState != FormWindowState.Normal)
+                return;
+
+            Point pt = PointToClient(Cursor.Position);
+
+            bool left = pt.X <= ResizeBorder;
+            bool right = pt.X >= ClientSize.Width - ResizeBorder;
+            bool top = pt.Y <= ResizeBorder;
+            bool bottom = pt.Y >= ClientSize.Height - ResizeBorder;
+
+            if (top && left) { m.Result = (IntPtr)HTTOPLEFT; return; }
+            if (top && right) { m.Result = (IntPtr)HTTOPRIGHT; return; }
+            if (bottom && left) { m.Result = (IntPtr)HTBOTTOMLEFT; return; }
+            if (bottom && right) { m.Result = (IntPtr)HTBOTTOMRIGHT; return; }
+
+            if (left) { m.Result = (IntPtr)HTLEFT; return; }
+            if (right) { m.Result = (IntPtr)HTRIGHT; return; }
+            if (top) { m.Result = (IntPtr)HTTOP; return; }
+            if (bottom) { m.Result = (IntPtr)HTBOTTOM; return; }
+        }
+
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            if (WindowState == FormWindowState.Maximized)
+                return;
+
+            using var pen = new Pen(_resizeBorderColor, CustomBorderThickness);
+            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        }
+
+
+
+
     }
 }
