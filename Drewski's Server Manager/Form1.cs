@@ -201,6 +201,9 @@ namespace Drewski_s_Server_Manager
             root.Controls.Add(_titleBar);
             _titleBar.MouseDown += TitleBar_MouseDown;
 
+            var raw = FileVersionInfo.GetVersionInfo(Application.ExecutablePath).ProductVersion ?? "0.0.0";
+            var clean = raw.Split('+')[0]; // drops the + and commit hash after it
+
 
             _titleLabel = new Label
             {
@@ -209,7 +212,7 @@ namespace Drewski_s_Server_Manager
                 Width = S(360),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = S(new Padding(14, 0, 0, 0)),
-                Text = "Drewski's Server Manager v3.7.1", // Title bar text
+                Text = $"Drewski's Server Manager v{clean}", // Title bar text
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular)
             };
