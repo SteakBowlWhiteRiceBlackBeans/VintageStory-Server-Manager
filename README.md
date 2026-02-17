@@ -12,7 +12,7 @@ It provides a simple graphical interface to:
 - View current player count
 - View CPU and RAM usage
 
-<img width="1197" height="709" alt="image" src="https://github.com/user-attachments/assets/6764a4f3-22c2-4758-9798-c4493677a6c2" />
+<img width="1345" height="730" alt="DSM_Example" src="https://github.com/user-attachments/assets/1334cfb3-2680-4119-bdc3-bf752c595ba9" />
 
 **How to Install and use:**
 - Download the latest release DSM.zip
