@@ -14,11 +14,15 @@ using Microsoft.VisualBasic.Devices;
 using System.Linq;
 
 
-
 namespace Drewski_s_Server_Manager
 {
     public partial class Form1 : Form
     {
+
+        private int S(int px) => (int)Math.Round(px * (DeviceDpi / 96.0));
+        private Size S(Size sz) => new Size(S(sz.Width), S(sz.Height));
+        private Padding S(Padding p) => new Padding(S(p.Left), S(p.Top), S(p.Right), S(p.Bottom));
+
         private RichTextBox _console = null!;
         private Panel _titleBar = null!;
         private Label _titleLabel = null!;
@@ -71,10 +75,12 @@ namespace Drewski_s_Server_Manager
         private const int CustomBorderThickness = 1;
         private const int WM_EXITSIZEMOVE = 0x0232;
         private const int MaxConsoleLines = 3000;
+        private const int ConsoleTrimHysteresis = 150;
         private readonly Color _consoleInfoColor = Color.Gainsboro;
-        private readonly Color _consoleWarnColor = Color.FromArgb(240, 200, 70);   // light yellow
-        private readonly Color _consoleErrorColor = Color.FromArgb(235, 90, 90);  // light red
-
+        private readonly Color _consoleWarnColor = Color.FromArgb(240, 200, 70);
+        private readonly Color _consoleErrorColor = Color.FromArgb(235, 90, 90);
+        private System.Windows.Forms.Timer? _spamTimer;
+        private long _spamCounter;
 
         private sealed class AppSettings
         {
@@ -140,6 +146,7 @@ namespace Drewski_s_Server_Manager
         public Form1()
         {
             InitializeComponent();
+            AutoScaleMode = AutoScaleMode.Dpi;
             BuildUi();
             LoadSettings();
 
@@ -172,11 +179,11 @@ namespace Drewski_s_Server_Manager
         {
             Text = "Drewski's Server Manager"; // This is for the OS, not title bar
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1200, 740);
-            MinimumSize = new Size(1000, 740);
+            ClientSize = S(new Size(1200, 740));
+            MinimumSize = S(new Size(1000, 740));
             BackColor = _appBg;
             FormBorderStyle = FormBorderStyle.None;
-            Padding = new Padding(8);
+            Padding = S(new Padding(8));
 
             Shown += (_, __) => ApplyRoundedCornersIfNeeded();
             SizeChanged += (_, __) => ApplyRoundedCornersIfNeeded();
@@ -190,19 +197,18 @@ namespace Drewski_s_Server_Manager
             var root = new Panel { Dock = DockStyle.Fill, BackColor = _appBg };
             Controls.Add(root);
 
-            _titleBar = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = _titleBg };
+            _titleBar = new Panel { Dock = DockStyle.Top, Height = S(44), BackColor = _titleBg };
             root.Controls.Add(_titleBar);
             _titleBar.MouseDown += TitleBar_MouseDown;
-
 
 
             _titleLabel = new Label
             {
                 AutoSize = false,
                 Dock = DockStyle.Left,
-                Width = 360,
+                Width = S(360),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(14, 0, 0, 0),
+                Padding = S(new Padding(14, 0, 0, 0)),
                 Text = "Drewski's Server Manager v3.6", // Title bar text
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular)
@@ -210,7 +216,7 @@ namespace Drewski_s_Server_Manager
             _titleLabel.MouseDown += TitleBar_MouseDown;
             _titleBar.Controls.Add(_titleLabel);
 
-            var btnPanel = new Panel { Dock = DockStyle.Right, Width = 160, BackColor = _titleBg };
+            var btnPanel = new Panel { Dock = DockStyle.Right, Width = S(160), BackColor = _titleBg };
             _titleBar.Controls.Add(btnPanel);
 
             _btnClose = MakeTitleButton("X");
@@ -219,7 +225,7 @@ namespace Drewski_s_Server_Manager
 
             _btnMax = MakeTitleButton("□");
             _btnMax.Font = new Font("Segoe UI", 14.0f, FontStyle.Regular);
-            _btnMax.Width = 60;
+            _btnMax.Width = S(60);
             _btnMax.Click += (_, __) =>
             {
                 WindowState = (WindowState == FormWindowState.Maximized)
@@ -239,7 +245,7 @@ namespace Drewski_s_Server_Manager
             {
                 Dock = DockStyle.Fill,
                 BackColor = _appBg,
-                Padding = new Padding(16, 32, 12, 16)
+                Padding = S(new Padding(16, 32, 12, 16))
             };
             root.Controls.Add(content);
 
@@ -248,9 +254,9 @@ namespace Drewski_s_Server_Manager
             _rightArea = new Panel
             {
                 Dock = DockStyle.Right,
-                Width = 340, // tweak this to taste
+                Width = S(340), // tweak this to taste
                 BackColor = _appBg,
-                Padding = new Padding(18, 8, 8, 8),
+                Padding = S(new Padding(18, 8, 8, 8)),
                 AutoScroll = true
             };
 
@@ -258,7 +264,7 @@ namespace Drewski_s_Server_Manager
             var consoleHost = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(14),
+                Padding = S(new Padding(14)),
                 BackColor = Color.Black
             };
 
@@ -281,6 +287,7 @@ namespace Drewski_s_Server_Manager
                 Cursor = Cursors.Arrow
             };
             _console.KeyPress += (_, e) => e.Handled = true;
+            
             consoleHost.Controls.Add(_console);
 
             BuildRightPanel(_rightArea);
@@ -288,6 +295,16 @@ namespace Drewski_s_Server_Manager
             AppendConsoleLine("Console ready.");
             SetStatus(ServerStatus.Stopped);
             SetPlayerCount(0);
+
+            KeyPreview = true;
+            KeyDown += (_, e) =>
+            {
+                if (e.Control && e.Shift && e.KeyCode == Keys.S)
+                {
+                    e.SuppressKeyPress = true;
+                    //StartConsoleSpam(totalLines: 3500, linesPerTick: 200, intervalMs: 25);
+                }
+            };
         }
 
 
@@ -299,9 +316,9 @@ namespace Drewski_s_Server_Manager
             var cmdPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 44,
+                Height = S(44),
                 BackColor = _appBg,
-                Padding = new Padding(0, 8, 0, 0)
+                Padding = S(new Padding(0, 8, 0, 0))
             };
             host.Controls.Add(cmdPanel);
 
@@ -309,9 +326,9 @@ namespace Drewski_s_Server_Manager
             var card = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 620,
+                Height = S(620),
                 BackColor = _panelBg,
-                Padding = new Padding(16)
+                Padding = S(new Padding(16))
             };
             host.Controls.Add(card);
 
@@ -320,7 +337,7 @@ namespace Drewski_s_Server_Manager
             {
                 Text = "Send",
                 Dock = DockStyle.Right,
-                Width = 90,
+                Width = S(90),
                 FlatStyle = FlatStyle.Flat,
                 UseVisualStyleBackColor = false,
                 BackColor = Color.FromArgb(235, 235, 235),
@@ -337,7 +354,7 @@ namespace Drewski_s_Server_Manager
             var spacer = new Panel
             {
                 Dock = DockStyle.Right,
-                Width = 8,
+                Width = S(8),
                 BackColor = _appBg
             };
 
@@ -345,7 +362,7 @@ namespace Drewski_s_Server_Manager
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
-                Padding = new Padding(1)
+                Padding = S(new Padding(1))
             };
 
             _commandBox = new TextBox
@@ -358,13 +375,24 @@ namespace Drewski_s_Server_Manager
                 BackColor = Color.FromArgb(30, 30, 30),
 
                 BorderStyle = BorderStyle.None
+
             };
             _commandBox.KeyDown += (_, e) =>
             {
-                if (e.KeyCode != Keys.Enter) return;
-                e.SuppressKeyPress = true;
-                SendCommandFromUi();
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;
+                    SendCommandFromUi();
+                }
+                else if (e.KeyCode == Keys.Escape)
+                {
+                    e.SuppressKeyPress = true;
+                }
             };
+            _commandBox.Multiline = true;
+            _commandBox.AcceptsReturn = false;
+            _commandBox.ScrollBars = ScrollBars.None;
+            _commandBox.WordWrap = false;
 
             cmdBoxBorder.Controls.Add(_commandBox);
 
@@ -464,7 +492,7 @@ namespace Drewski_s_Server_Manager
             var playerRow = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 28,
+                Height = S(28),
                 BackColor = _panelBg
             };
             card.Controls.Add(playerRow);
@@ -477,7 +505,7 @@ namespace Drewski_s_Server_Manager
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(18, 0, 0, 0)
+                Padding = S(new Padding(18, 0, 0, 0))
             };
             playerRow.Controls.Add(_playerCountLabel);
 
@@ -485,7 +513,7 @@ namespace Drewski_s_Server_Manager
             var resourceRow = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 26,
+                Height = S(26),
                 BackColor = _panelBg
             };
             card.Controls.Add(resourceRow);
@@ -498,7 +526,7 @@ namespace Drewski_s_Server_Manager
                 ForeColor = Color.FromArgb(200, 200, 200),
                 Font = new Font("Segoe UI", 9.0f, FontStyle.Regular),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(18, 0, 0, 0)
+                Padding = S(new Padding(18, 0, 0, 0))
             };
             resourceRow.Controls.Add(_resourceLabel);
 
@@ -506,15 +534,15 @@ namespace Drewski_s_Server_Manager
             var statusRow = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 38,
+                Height = S(38),
                 BackColor = _panelBg
             };
             card.Controls.Add(statusRow);
 
             _statusDot = new Panel
             {
-                Width = 12,
-                Height = 12,
+                Width = S(12),
+                Height = S(12),
                 Left = 0,
                 Top = 13,
                 BackColor = Color.Gray
@@ -532,8 +560,8 @@ namespace Drewski_s_Server_Manager
                 AutoSize = false,
                 Left = 18,
                 Top = 8,
-                Width = 360,
-                Height = 22,
+                Width = S(360),
+                Height = S(22),
                 Text = "Status: Stopped",
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular)
@@ -543,7 +571,7 @@ namespace Drewski_s_Server_Manager
             var header = new Label
             {
                 Dock = DockStyle.Top,
-                Height = 28,
+                Height = S(28),
                 Text = "Server Controls",
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 11.0f, FontStyle.Bold),
@@ -1244,8 +1272,8 @@ namespace Drewski_s_Server_Manager
             {
                 Text = text,
                 Dock = DockStyle.Right,
-                Width = 50,
-                Height = 44,
+                Width = S(50),
+                Height = S(44),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = _titleBg,
                 ForeColor = Color.White,
@@ -1287,6 +1315,8 @@ namespace Drewski_s_Server_Manager
         {
             if (_console == null || _console.IsDisposed) return;
 
+            bool wasAtBottom = IsConsoleAtBottom();
+
             var c = _consoleInfoColor;
 
             if (line.IndexOf("[Server Error]", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -1301,36 +1331,44 @@ namespace Drewski_s_Server_Manager
                 c = _consoleWarnColor;
             }
 
-            _console.SelectionStart = _console.TextLength;
-            _console.SelectionLength = 0;
-            _console.SelectionColor = c;
-            _console.AppendText(line + Environment.NewLine);
-            _console.SelectionColor = _consoleInfoColor;
-
+            _console.SuspendLayout();
             try
             {
-                int lineCount = _console.GetLineFromCharIndex(_console.TextLength) + 1;
-                if (lineCount > MaxConsoleLines)
-                {
-                    int removeLines = lineCount - MaxConsoleLines;
+                _console.SelectionStart = _console.TextLength;
+                _console.SelectionLength = 0;
+                _console.SelectionColor = c;
+                _console.AppendText(line + Environment.NewLine);
+                _console.SelectionColor = _consoleInfoColor;
 
-                    int charIndex = _console.GetFirstCharIndexFromLine(removeLines);
-                    if (charIndex > 0)
-                    {
-                        _console.Select(0, charIndex);
-                        _console.SelectedText = string.Empty;
-                    }
+                // Robust trim that avoids RichEdit “ding” behavior
+                TrimConsoleToMaxLines_NoBeep();
+
+                if (wasAtBottom)
+                {
+                    _console.SelectionStart = _console.TextLength;
+                    _console.ScrollToCaret();
                 }
             }
             catch
             {
-                // Keep console resilient don't crash UI if trimming fails.
+                // keep resilient
             }
-
-            // Scrollingg
-            _console.SelectionStart = _console.TextLength;
-            _console.ScrollToCaret();
+            finally
+            {
+                _console.ResumeLayout();
+            }
         }
+
+
+        private bool IsConsoleAtBottom()
+        {
+            if (_console == null || _console.IsDisposed) return true;
+
+            // Char index at bottom-left of the visible area
+            int lastVisibleChar = _console.GetCharIndexFromPosition(new Point(1, _console.ClientRectangle.Bottom - 1));
+            return lastVisibleChar >= _console.TextLength - 2;
+        }
+
 
 
         private void ApplyRoundedCornersIfNeeded()
@@ -1775,6 +1813,12 @@ namespace Drewski_s_Server_Manager
         // SETTINGS WINDOW
         private sealed class SettingsForm : Form
         {
+
+            // DPI scaling helpers
+            private int S(int px) => (int)Math.Round(px * (DeviceDpi / 96.0));
+            private Size S(Size sz) => new Size(S(sz.Width), S(sz.Height));
+            private Padding S(Padding p) => new Padding(S(p.Left), S(p.Top), S(p.Right), S(p.Bottom));
+
             private readonly TextBox _exeBox;
             private readonly TextBox _argsBox;
 
@@ -1829,6 +1873,8 @@ namespace Drewski_s_Server_Manager
                 string autoRestartAmPm
             )
             {
+
+                AutoScaleMode = AutoScaleMode.Dpi;
                 Text = "Settings";
                 StartPosition = FormStartPosition.CenterParent;
                 FormBorderStyle = FormBorderStyle.Sizable;
@@ -1836,10 +1882,10 @@ namespace Drewski_s_Server_Manager
                 MaximizeBox = true;
                 ShowInTaskbar = false;
 
-                MinimumSize = new Size(700, 580);
-                ClientSize = new Size(820, 580);
+                MinimumSize = S(new Size(700, 580));
+                ClientSize = S(new Size(820, 580));
 
-                var root = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14) };
+                var root = new Panel { Dock = DockStyle.Fill, Padding = S(new Padding(14)) };
                 Controls.Add(root);
 
                 var layout = new TableLayoutPanel
@@ -1852,30 +1898,30 @@ namespace Drewski_s_Server_Manager
                 root.Controls.Add(layout);
 
                 // Row styles
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(20)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(14)));
 
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(20)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(54)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(14)));
 
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(20)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(14)));
 
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(20)));
 
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
 
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(34)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(26)));
 
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(44)));
 
                 // Server Executable
                 layout.Controls.Add(new Label
@@ -1887,7 +1933,7 @@ namespace Drewski_s_Server_Manager
 
                 var exeRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
                 exeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                exeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+                exeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(110)));
                 layout.Controls.Add(exeRow, 0, 1);
 
                 _exeBox = new TextBox
@@ -1921,11 +1967,11 @@ namespace Drewski_s_Server_Manager
                 var argsNote = new Label
                 {
                     Dock = DockStyle.Top,
-                    Height = 26,
+                    Height = S(26),
                     Text = "Selecting a new server data folder location will automatically include the argument --datapath \"server data folder\"",
                     ForeColor = Color.FromArgb(90, 90, 90),
                     Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-                    Padding = new Padding(2, 6, 2, 0)
+                    Padding = S(new Padding(2, 6, 2, 0))
                 };
 
                 argsPanel.Controls.Add(argsNote);
@@ -1942,7 +1988,7 @@ namespace Drewski_s_Server_Manager
 
                 var dataRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
                 dataRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                dataRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+                dataRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(110)));
                 layout.Controls.Add(dataRow, 0, 7);
 
                 _dataPathBox = new TextBox
@@ -2053,7 +2099,7 @@ namespace Drewski_s_Server_Manager
 
                 _maxBackupCountBox = new TextBox
                 {
-                    Width = 90,
+                    Width = S(90),
                     Text = Math.Max(0, maxBackupFileCount).ToString(),
                     Margin = new Padding(0, 5, 0, 0)
                 };
@@ -2079,7 +2125,7 @@ namespace Drewski_s_Server_Manager
 
                 _maxBackupSizeGbBox = new TextBox
                 {
-                    Width = 90,
+                    Width = S(90),
                     Text = (maxBackupFolderSizeGb < 0 ? 0 : maxBackupFolderSizeGb).ToString("0.##"),
                     Margin = new Padding(0, 5, 0, 0)
                 };
@@ -2156,7 +2202,7 @@ namespace Drewski_s_Server_Manager
                     Text = "Reboot announcement will be sent in chat 15 minutes prior and every 3 minutes after",
                     ForeColor = Color.FromArgb(90, 90, 90),
                     Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-                    Padding = new Padding(2, 2, 2, 0),
+                    Padding = S(new Padding(2, 2, 2, 0)),
                     Visible = autoRestartEnabled
                 };
                 layout.Controls.Add(_restartNote, 0, 15);
@@ -2194,7 +2240,7 @@ namespace Drewski_s_Server_Manager
                 {
                     Dock = DockStyle.Fill,
                     FlowDirection = FlowDirection.RightToLeft,
-                    Padding = new Padding(0),
+                    Padding = S(new Padding(0)),
                     WrapContents = false
                 };
                 layout.Controls.Add(buttons, 0, 17);
@@ -2204,7 +2250,7 @@ namespace Drewski_s_Server_Manager
                     Text = "Save",
                     DialogResult = DialogResult.OK,
                     Width = 100,
-                    Height = 32,
+                    Height = S(32),
                     Margin = new Padding(8, 6, 0, 6)
                 };
 
@@ -2326,7 +2372,7 @@ namespace Drewski_s_Server_Manager
                     Text = "Cancel",
                     DialogResult = DialogResult.Cancel,
                     Width = 100,
-                    Height = 32,
+                    Height = S(32),
                     Margin = new Padding(8, 6, 0, 6)
                 };
 
@@ -2334,7 +2380,7 @@ namespace Drewski_s_Server_Manager
                 {
                     Text = "Reset to Defaults",
                     Width = 140,
-                    Height = 32,
+                    Height = S(32),
                     Margin = new Padding(8, 6, 0, 6)
                 };
                 btnReset.Click += (_, __) => ResetToDefaults();
@@ -2493,11 +2539,19 @@ namespace Drewski_s_Server_Manager
         // MODS WINDOW
         private sealed class ModsForm : Form
         {
+
+            // DPI scaling helpers
+            private int S(int px) => (int)Math.Round(px * (DeviceDpi / 96.0));
+            private Size S(Size sz) => new Size(S(sz.Width), S(sz.Height));
+            private Padding S(Padding p) => new Padding(S(p.Left), S(p.Top), S(p.Right), S(p.Bottom));
+
             private readonly ListBox _list;
             private readonly string _modsPath;
 
             public ModsForm(string modsPath)
             {
+
+                AutoScaleMode = AutoScaleMode.Dpi;
                 _modsPath = modsPath;
 
                 Text = "Mods";
@@ -2507,10 +2561,10 @@ namespace Drewski_s_Server_Manager
                 MaximizeBox = true;
                 ShowInTaskbar = false;
 
-                MinimumSize = new Size(520, 360);
-                ClientSize = new Size(720, 420);
+                MinimumSize = S(new Size(520, 360));
+                ClientSize = S(new Size(720, 420));
 
-                var root = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
+                var root = new Panel { Dock = DockStyle.Fill, Padding = S(new Padding(12)) };
                 Controls.Add(root);
 
                 var layout = new TableLayoutPanel
@@ -2520,8 +2574,8 @@ namespace Drewski_s_Server_Manager
                     RowCount = 2
                 };
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, S(170)));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, S(28)));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 root.Controls.Add(layout);
 
@@ -2675,6 +2729,77 @@ namespace Drewski_s_Server_Manager
             e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
         }
 
+
+        //private void StartConsoleSpam(int totalLines = 3500, int linesPerTick = 200, int intervalMs = 25)
+        //{
+        //    StopConsoleSpam();
+
+        //    long target = _spamCounter + totalLines;
+
+        //    _spamTimer = new System.Windows.Forms.Timer { Interval = Math.Max(1, intervalMs) };
+        //    _spamTimer.Tick += (_, __) =>
+        //    {
+        //        int remaining = (int)Math.Min(linesPerTick, Math.Max(0, target - _spamCounter));
+        //        for (int i = 0; i < remaining; i++)
+        //        {
+        //            _spamCounter++;
+        //            AppendConsoleLine($"[SPAM] {_spamCounter} {DateTime.Now:HH:mm:ss.fff} Spam line");
+        //        }
+
+        //        if (_spamCounter >= target)
+        //            StopConsoleSpam();
+        //    };
+        //    _spamTimer.Start();
+
+        //    AppendConsoleLine($"[SPAM] started, will add {totalLines} lines");
+        //}
+
+        //private void StopConsoleSpam()
+        //{
+        //    if (_spamTimer == null) return;
+        //    _spamTimer.Stop();
+        //    _spamTimer.Dispose();
+        //    _spamTimer = null;
+        //    AppendConsoleLine("[SPAM] stopped");
+        //}
+        
+
+private static class Native
+    {
+        public const int WM_SETREDRAW = 0x000B;
+        public const int EM_SETSEL = 0x00B1;
+        public const int EM_REPLACESEL = 0x00C2;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+        }
+
+private void TrimConsoleToMaxLines_NoBeep()
+        {
+            if (_console == null || _console.IsDisposed || !_console.IsHandleCreated) return;
+
+            int lineCount = _console.GetLineFromCharIndex(_console.TextLength) + 1;
+            if (lineCount <= MaxConsoleLines) return;
+
+            int removeLines = lineCount - MaxConsoleLines;
+            int charIndex = _console.GetFirstCharIndexFromLine(removeLines);
+            if (charIndex <= 0) return;
+
+            Native.SendMessage(_console.Handle, Native.WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+            try
+            {
+                Native.SendMessage(_console.Handle, Native.EM_SETSEL, IntPtr.Zero, (IntPtr)charIndex);
+                Native.SendMessage(_console.Handle, Native.EM_REPLACESEL, (IntPtr)1, "");
+            }
+            finally
+            {
+                Native.SendMessage(_console.Handle, Native.WM_SETREDRAW, (IntPtr)1, IntPtr.Zero);
+                _console.Invalidate();
+            }
+        }
 
 
 
