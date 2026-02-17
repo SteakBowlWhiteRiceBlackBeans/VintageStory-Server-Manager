@@ -209,7 +209,7 @@ namespace Drewski_s_Server_Manager
                 Width = S(360),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = S(new Padding(14, 0, 0, 0)),
-                Text = "Drewski's Server Manager v3.6", // Title bar text
+                Text = "Drewski's Server Manager v3.7.1", // Title bar text
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10.0f, FontStyle.Regular)
             };
