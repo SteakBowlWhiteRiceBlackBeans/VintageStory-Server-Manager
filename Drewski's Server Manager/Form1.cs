@@ -1,5 +1,4 @@
-﻿// File: Form1.cs
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -700,6 +699,7 @@ namespace Drewski_s_Server_Manager
                     SafeLog($"[manager] Loaded Args: {_launchArgsSetting}");
                 if (!string.IsNullOrWhiteSpace(_serverDataPathSetting))
                     SafeLog($"[manager] Loaded ServerDataPath: {_serverDataPathSetting}");
+                try { CrashLogger.SetServerDataPath(_serverDataPathSetting); } catch { }
             }
             catch (Exception ex)
             {
