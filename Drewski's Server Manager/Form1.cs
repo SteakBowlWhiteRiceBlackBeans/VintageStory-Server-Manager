@@ -80,6 +80,9 @@ namespace Drewski_s_Server_Manager
         private readonly Color _consoleErrorColor = Color.FromArgb(235, 90, 90);
         private System.Windows.Forms.Timer? _spamTimer;
         private long _spamCounter;
+        private DateTime _nextAutoRestartLocal = DateTime.MinValue;
+        private DateTime _lastAutoRestartExecutedLocal = DateTime.MinValue;
+
 
         private sealed class AppSettings
         {
@@ -411,7 +414,13 @@ namespace Drewski_s_Server_Manager
 
             // Create buttons
             _btnStart = MakeActionButton("Start");
-            _btnStart.Click += async (_, __) => await StartServerAsync();
+            _btnStart.Click += async (_, __) =>
+            {
+                StartAutomationCooldown(5);
+                AppendConsoleLine($"[manager] Automation cooldown active for 5 minutes.");
+                await StartServerAsync();
+            };
+
 
             _btnStop = MakeActionButton("Stop");
             _btnStop.Click += async (_, __) =>
@@ -423,6 +432,9 @@ namespace Drewski_s_Server_Manager
             _btnRestart = MakeActionButton("Restart");
             _btnRestart.Click += async (_, __) =>
             {
+                StartAutomationCooldown(5);
+                AppendConsoleLine($"[manager] Automation cooldown active for 5 minutes.");
+
                 SetPlayerCount(0);
                 await StopServerAsync(forceKill: false);
                 await StartServerAsync();
@@ -649,6 +661,7 @@ namespace Drewski_s_Server_Manager
                                ?? TryGetString(root, "VintageStoryServerData")
                                ?? TryGetString(root, "vintageStoryServerData");
 
+
                     autoSaveEnabled = TryGetBool(root, "AutoSaveEnabled") ?? TryGetBool(root, "autoSaveEnabled");
                     autoSaveMinutes = TryGetInt(root, "AutoSaveMinutes") ?? TryGetInt(root, "autoSaveMinutes");
 
@@ -664,6 +677,13 @@ namespace Drewski_s_Server_Manager
                     autoRestartHour12 = TryGetInt(root, "AutoRestartHour12") ?? TryGetInt(root, "autoRestartHour12");
                     autoRestartMinute = TryGetInt(root, "AutoRestartMinute") ?? TryGetInt(root, "autoRestartMinute");
                     autoRestartAmPm = TryGetString(root, "AutoRestartAmPm") ?? TryGetString(root, "autoRestartAmPm");
+                }
+
+                if (!string.IsNullOrWhiteSpace(dataPath))
+                {
+                    CrashLogger.SetServerDataPath(dataPath);
+                    AppendConsoleLine($"[manager] DSM console logging started in {Path.Combine(dataPath, "Logs")}");
+
                 }
 
                 _settings = loaded;
@@ -705,6 +725,18 @@ namespace Drewski_s_Server_Manager
             {
                 SafeLog("[manager] Failed to load settings: " + ex.Message);
             }
+        }
+
+        private DateTime _automationCooldownUntilUtc = DateTime.MinValue;
+
+        private void StartAutomationCooldown(int minutes)
+        {
+            _automationCooldownUntilUtc = DateTime.UtcNow.AddMinutes(minutes);
+        }
+
+        private bool IsInAutomationCooldown()
+        {
+            return DateTime.UtcNow < _automationCooldownUntilUtc;
         }
 
         private static string? TryGetString(JsonElement obj, string propName)
@@ -1544,6 +1576,18 @@ namespace Drewski_s_Server_Manager
 
 
 
+        private void RecalculateNextAutoRestart(TimeSpan scheduledLocalTime)
+        {
+            var now = DateTime.Now;
+
+            var candidate = now.Date.Add(scheduledLocalTime); // today at 01:00
+            if (candidate <= now)
+                candidate = candidate.AddDays(1); // tomorrow at 01:00
+
+            _nextAutoRestartLocal = candidate;
+        }
+
+
 
         // AUTOMATION IMPLEMENTATION
         private void ApplyAutomationScheduling(bool serverRunning)
@@ -1587,6 +1631,7 @@ namespace Drewski_s_Server_Manager
         {
             if (!IsServerRunning()) return;
             if (!_autoSaveEnabledSetting) return;
+            if (IsInAutomationCooldown()) return;
 
             _autoSaveTimer.Stop();
             try
@@ -1600,10 +1645,12 @@ namespace Drewski_s_Server_Manager
             }
         }
 
+
         private void OnAutoBackupTick()
         {
             if (!IsServerRunning()) return;
             if (!_autoBackupEnabledSetting) return;
+            if (IsInAutomationCooldown()) return;
 
             _autoBackupTimer.Stop();
             try
@@ -1718,11 +1765,17 @@ namespace Drewski_s_Server_Manager
             if (!IsServerRunning()) return;
             if (!_autoRestartEnabledSetting) return;
             if (_autoRestartInProgress) return;
+            if (IsInAutomationCooldown()) return;
 
             var now = DateTime.Now;
+
             var scheduled = BuildScheduledRestartTime(now.Date);
 
-            if (_restartAnnouncementsSent.Count > 0 && _lastAutoRestartDate.Date != now.Date)
+            if (scheduled <= now)
+            {
+                scheduled = BuildScheduledRestartTime(now.Date.AddDays(1));
+            }
+            if (_restartAnnouncementsSent.Count > 0 && _lastAutoRestartDate.Date != scheduled.Date)
             {
                 _restartAnnouncementsSent.Clear();
             }
@@ -1754,13 +1807,15 @@ namespace Drewski_s_Server_Manager
                 }
             }
 
-            if (now >= scheduled && _lastAutoRestartDate.Date != now.Date)
+            if (now >= scheduled && _lastAutoRestartDate.Date != scheduled.Date)
             {
                 _autoRestartInProgress = true;
                 try
                 {
                     await RunAutoRestartAsync();
-                    _lastAutoRestartDate = now.Date;
+
+                    _lastAutoRestartDate = scheduled.Date;
+
                     _restartAnnouncementsSent.Clear();
                 }
                 finally
@@ -1769,6 +1824,7 @@ namespace Drewski_s_Server_Manager
                 }
             }
         }
+
 
         private DateTime BuildScheduledRestartTime(DateTime dayLocalDate)
         {

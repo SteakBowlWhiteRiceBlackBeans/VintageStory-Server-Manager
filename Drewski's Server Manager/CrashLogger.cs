@@ -2,22 +2,20 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace Drewski_s_Server_Manager
 {
     public static class CrashLogger
     {
+        private static string? _logDir;
+        private static bool _startLineWritten;
 
-        private static string _logDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "VintagestoryData",
-            "Logs");
+        private const long MaxSizeBytes = 3 * 1024 * 1024; // 3 MB
 
-        private static string LogFile => Path.Combine(_logDir, "DServerManager.txt");
-
-
-        private const long MaxSizeBytes = 5 * 1024 * 1024;
+        private static string LogFile =>
+            Path.Combine(_logDir!, "DServerManager.txt");
 
         public static void InitGlobalExceptionLogging()
         {
@@ -49,35 +47,62 @@ namespace Drewski_s_Server_Manager
                         e.SetObserved();
                     }
                 };
-
-
-                Log("CrashLogger initialized");
             }
             catch
             {
-                // never allow logger to crash the app
+                // never allow logger init to crash the app
             }
         }
 
-        // Call this after settings are loaded to move logs into the server data folder.
         public static void SetServerDataPath(string? serverDataPath)
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(serverDataPath))
                 {
-                    // reset to default
-                    _logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VintagestoryData", "Logs");
+                    _logDir = null;
                     return;
                 }
 
                 var resolved = ResolvePath(serverDataPath);
-                // place logs under the server data folder in a "Logs" subfolder
-                _logDir = Path.Combine(resolved, "Logs");
+                _logDir = Path.Combine(resolved, "logs", "DSM");
+                Directory.CreateDirectory(_logDir);
+
+                WriteStartLineOnce();
             }
             catch
             {
                 // never throw from logger setup
+            }
+        }
+
+        private static void WriteStartLineOnce()
+        {
+            try
+            {
+                if (_startLineWritten) return;
+                if (string.IsNullOrWhiteSpace(_logDir)) return;
+
+                _startLineWritten = true;
+
+                var fullPath = LogFile;
+
+                // Console line (will only show if you have a console / are running under one)
+                try
+                {
+                    Console.WriteLine($"Log file started at {fullPath}");
+                }
+                catch
+                {
+                    // ignore if no console available
+                }
+
+                // Also write it into the file so you can always see it
+                Log($"Log file started at {fullPath}");
+            }
+            catch
+            {
+                // ignore
             }
         }
 
@@ -91,6 +116,11 @@ namespace Drewski_s_Server_Manager
         {
             try
             {
+                // If the app hasn't set the server data path yet, do nothing.
+                // This prevents logs writing to random fallback locations.
+                if (string.IsNullOrWhiteSpace(_logDir))
+                    return;
+
                 Directory.CreateDirectory(_logDir);
                 RotateIfNeeded();
 
@@ -119,7 +149,7 @@ namespace Drewski_s_Server_Manager
             }
             catch
             {
-
+                // logger must never throw
             }
         }
 
@@ -127,10 +157,15 @@ namespace Drewski_s_Server_Manager
         {
             try
             {
-                if (!File.Exists(LogFile)) return;
+                if (string.IsNullOrWhiteSpace(_logDir))
+                    return;
+
+                if (!File.Exists(LogFile))
+                    return;
 
                 var fi = new FileInfo(LogFile);
-                if (fi.Length < MaxSizeBytes) return;
+                if (fi.Length < MaxSizeBytes)
+                    return;
 
                 // Keep a single log file. Trim the oldest content and keep the most
                 // recent MaxSizeBytes bytes to enforce the size limit.
@@ -146,6 +181,7 @@ namespace Drewski_s_Server_Manager
                         }
 
                         src.Seek(-keep, SeekOrigin.End);
+
                         var buffer = new byte[keep];
                         int read = 0;
                         while (read < buffer.Length)
@@ -158,7 +194,6 @@ namespace Drewski_s_Server_Manager
                         File.WriteAllBytes(temp, buffer.AsSpan(0, read).ToArray());
                     }
 
-                    // Replace original with trimmed file
                     File.Delete(LogFile);
                     File.Move(temp, LogFile);
                 }
@@ -170,7 +205,7 @@ namespace Drewski_s_Server_Manager
             }
             catch
             {
-                // ignore 
+                // ignore
             }
         }
     }
