@@ -33,6 +33,6 @@ Get the latest compiled version from the
 [Releases](https://github.com/SteakBowlWhiteRiceBlackBeans/VintageStory-Server-Manager/releases) page.
 
 **Requirements**
-.Net Desktop Runtime 10
+[.NET Desktop Runtime 10.0.x](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
 
 [Vintage Story mod page](https://mods.vintagestory.at/show/mod/41122)
