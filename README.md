@@ -12,7 +12,8 @@ It provides a simple graphical interface to:
 - View current player count **WIP**
 - View CPU and RAM usage
 
-<img width="1345" height="730" alt="DSM_Example" src="[https://github.com/user-attachments/assets/1334cfb3-2680-4119-bdc3-bf752c595ba9](https://github.com/SteakBowlWhiteRiceBlackBeans/VintageStory-Server-Manager/blob/master/VSServerManagerExample.png?raw=true)" />
+<img width="1488" height="883" alt="VSServerManagerExample" src="https://github.com/user-attachments/assets/1e838a1d-6684-45b8-b1c5-d362ef407b0b" />
+
 
 **How to Install and use:**
 - Download the latest release VSSM.zip
